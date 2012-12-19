@@ -1,0 +1,132 @@
+#!/bin/sh
+
+#
+#backup - Backup Script for AIX - rfrantz 06/05/2002
+#
+
+#set -x
+
+#############
+# Variables #
+#############
+
+
+#NOTE: It may be necessary to change some of these variables!!
+#NOTE ALSO: GNU Tar (gtar) will need to be installed on the system!!
+PATH=/usr/bin:/usr/sbin:/usr/ucb:/sbin:/usr/local/bin
+TAPE_DEV=/dev/rmt0
+NTAPE_DEV=/dev/rmt0.1
+BSIZE=512
+NUM=1
+BACKUP_DIR=/usr/local/backup/logs
+FLIST=${BACKUP_DIR}/flist
+LABEL=${BACKUP_DIR}/tape_label
+LOG_DATE=${BACKUP_DIR}/log_date
+LOGFILE="${BACKUP_DIR}/`date +%Y%m%d`.log"
+COMPNAME="Self Funding Administrators"
+MAIL_DIR=${BACKUP_DIR}/mail
+MAIL_FILE="${MAIL_DIR}/`cat ${LOG_DATE}`_backup_status"
+RCPTS="amyn@sfanet.com paulgovatos@informed-llc.com"
+
+
+#############
+# Functions #
+#############
+
+chk_exit_stat () {
+   #Check the exit status of some command/function
+   echo "STATUS: $?"
+}
+
+chdev_bsize () {
+   #Run the 'chdev' command for IBM tape drives; this forces the blocksize
+   #to 0 (variable)
+   echo "Changing the tape drive's blocksize to '${BSIZE}'."
+   chdev -l `basename ${TAPE_DEV}` -a block_size=${BSIZE}
+}
+
+gen_file_list () {
+   #Generate a file list (leave out /tmp, /mnt, and /proc)
+   echo "Changing into '/'..."
+   cd /
+   echo "Generating the list of files to back up..."
+   ls | grep -v mnt | grep -v tmp | grep -v proc > $FLIST
+}
+
+tape_rew () {
+   #Rewind the tape
+   echo "\nRewinding the tape..."
+   mt -f ${TAPE_DEV} rewind
+}
+
+mv_tape_fwd () {
+   #Move the tape ahead 1 archive
+   echo "Moving the tape ahead ${NUM} archive(s)...\n"
+   mt -f ${NTAPE_DEV} fsf ${NUM}
+}
+
+gen_label () {
+   #Create a label for the tape (electronic, not physical!)
+   #Info: Date, Time, Logname, Company
+   echo "Generating the tape label..."
+   echo "
+Date=`date +%D`
+Time=`date +%T`
+Logname=${LOGFILE}
+Company_Name=${COMPNAME}
+" > $LABEL
+}
+
+write_label () {
+   #Write the label onto the tape
+   echo "Writing the label to the tape..."
+   LABEL=`basename ${LABEL}` #Grab JUST the basename of the label
+   cd ${BACKUP_DIR}          #Change into ${BACKUP_DIR} to grab the label
+   gtar cvbf ${BSIZE} ${NTAPE_DEV} ${LABEL}
+}
+
+full_backup () {
+   #Perform the full backup
+   echo "Running the full backup.  Let 'er rip!"
+   echo "Changing into '/', using RELATIVE path names!\n"
+   cd /
+   gtar Rcvbf ${BSIZE} ${NTAPE_DEV} --files-from=$FLIST
+}
+
+write_log () {
+   #Write $LOGFILE to tape
+   echo "Changing into '${BACKUP_DIR}'..."
+   cd ${BACKUP_DIR}
+   LOGFILE=`basename ${LOGFILE}`
+   echo "LOGFILE=${LOGFILE}"
+   echo "Writing the log '${LOGFILE}' to tape..."
+   gtar cvbf ${BSIZE} ${NTAPE_DEV} ${LOGFILE}
+}
+
+
+#########
+# Start #
+#########
+
+echo "`date +%Y%m%d`" > ${LOG_DATE}
+
+exec > ${LOGFILE} 2>&1 	#Write it ALL into a log
+
+echo "Starting $0..."
+echo "Starting Date: `date +%D`"		#Date and time
+echo "Starting Time: `date +%T`"
+gen_file_list		#Generate the file list, 'flist'
+gen_label		#Generate the lable, 'tape_label'
+tape_rew		#Rewind the tape
+chdev_bsize		#Force the tape's blocksize to '0'
+write_label		#Write the label to tape
+full_backup		#Do it! Run the backup
+write_log		#Write the logfile to tape
+echo "$0 is complete!"
+echo "Ending Time: `date +%T`"
+#Eject the tape
+mt -f ${TAPE_DEV} offline
+
+#Generate the backup status email and mail it
+backup_status
+mail -s "Backup Status" ${RCPTS} < ${MAIL_FILE}

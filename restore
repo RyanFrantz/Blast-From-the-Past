@@ -1,0 +1,124 @@
+#!/bin/sh
+
+#
+#restore - Tape Restore Script for AIX - rfrantz 06/05/2002
+#
+
+#set -x
+
+#############
+# Variables #
+#############
+
+#NOTE: It may be necessary to change some of these variables!!
+#NOTE ALSO: GNU Tar (gtar) will need to be installed on the system!!
+PATH=/usr/bin:/usr/sbin:/usr/ucb:/sbin:/usr/local/bin
+TAPE_DEV=/dev/rmt0
+NTAPE_DEV=/dev/rmt0.1
+NUM=1
+RESTORE_DIR=/usr/local/backup/restore
+LABEL=${RESTORE_DIR}/tape_label
+LOGFILE="${RESTORE_DIR}/restore_`date +%Y%m%d`.log"
+
+
+#############
+# Functions #
+#############
+
+chk_exit_stat () {
+   #Check the exit status of some command/function
+   echo "STATUS: $?"
+}
+
+oops () {
+   #Spit out the syntax of this command
+   echo "\nUsage: $0 file_to_restore\n"
+   echo "NOTE: Remove the leading slash ( / ) from the file you specify"
+   echo "Example: /usr/local/bin/restore --> usr/local/bin/restore\n"
+   exit 1
+}
+
+tape_rew () {
+   #Rewind the tape
+   echo "\nRewinding the tape..."
+   mt -f ${TAPE_DEV} rewind
+}
+
+mv_tape_fwd () {
+   #Move the tape ahead 1 archive
+   echo "Moving the tape ahead ${NUM} archive(s)..."
+   mt -f ${NTAPE_DEV} fsf ${NUM}
+}
+
+mk_restore_dir () {
+   #Verify that the 'restore' directory exists; create it if necessary
+   echo "Checking for '${RESTORE_DIR}'..."
+   if [ ! -d ${RESTORE_DIR} ]
+      then
+         echo "'${RESTORE_DIR}' does not exist!  I'll create it."
+         mkdir ${RESTORE_DIR}
+         if [ -d ${RESTORE_DIR} ]
+           then
+             echo "Created '${RESTORE_DIR}'!\n"
+           else
+             echo "Looks like I could not create that directory!! Panic!"
+             echo "Quitting!"
+             exit 128
+         fi
+      else
+         echo "Good news: '${RESTORE_DIR}' exists!\n"
+   fi
+}
+
+confirm_backup () {
+   #Confirm that this tape has a valid backup
+   echo "Changing into '${RESTORE_DIR}'..."
+   cd ${RESTORE_DIR}
+   #Remove any previous label from any previous restores
+   test -f ${LABEL} && rm -f ${LABEL}
+   echo "Pulling 'tape_label' off the tape to verify this is a valid backup..."
+   gtar xvf ${TAPE_DEV}  #This should pull 'tape_label'
+   if [ -f ${LABEL} ]
+      then
+         cat ${LABEL}
+      else
+         echo "I can't find '${LABEL} !!\nQuitting..."
+         echo "Exit status: 2\n"
+         exit 2
+   fi
+}
+
+
+
+###############
+# Exit Status #
+###############
+
+# 1 - Missing argument
+# 2 - Could not locate ${LABEL}
+
+
+#########
+# Start #
+#########
+
+#chk_args		#Check for arguments
+if [ $# -lt 1 ]		#Check for arguments
+   then
+      oops
+fi
+mk_restore_dir		#Create ${RESTORE_DIR} if it's missing
+exec > ${LOGFILE} 2>&1    #Write it ALL into a log                
+echo "Starting $0..."                                                           
+date +%D                #Date and time                                          
+date +%T
+tape_rew		#Rewind the tape to start
+confirm_backup		#Ensure this is a valid backup tape
+tape_rew		#Rewind again
+mv_tape_fwd		#Move the tape forward one archive
+#Restore the requested file
+cd ${RESTORE_DIR}
+echo "Restoring '$1'...\n"
+gtar xvf ${TAPE_DEV} $1
+echo "\n$0 completed!\n"
+date +%T
